@@ -1,0 +1,115 @@
+name: Build Application and Make Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      VERSION:
+        description: "input VERSION"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  build_release:
+    name: Build Release
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      # Required for Azure Trusted Signing
+      id-token: write
+      # Required for vcpkg binary cache
+      packages: write
+    with:
+      build-type: Release
+      environment: Release
+    secrets: inherit
+
+  create_release:
+    needs: build_release
+    permissions:
+      contents: write
+    runs-on: ubuntu-slim
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: "true"
+          path: "PrismLauncher-source"
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+      - name: Grab and store version
+        run: |
+          tag_name=$(echo ${{ github.ref }} | grep -oE "[^/]+$")
+          echo "VERSION=$tag_name" >> $GITHUB_ENV
+      - name: Package artifacts properly
+        run: |
+          mv ${{ github.workspace }}/PrismLauncher-source PrismLauncher-${{ inputs.VERSION }}
+          mv PrismLauncher-Linux-Qt6-Portable*/PrismLauncher-portable.tar.gz PrismLauncher-Linux-Qt6-Portable-${{ inputs.VERSION }}.tar.gz
+          mv PrismLauncher-Linux-aarch64-Qt6-Portable*/PrismLauncher-portable.tar.gz PrismLauncher-Linux-aarch64-Qt6-Portable-${{ inputs.VERSION }}.tar.gz
+          mv PrismLauncher-*.AppImage/PrismLauncher-*-x86_64.AppImage PrismLauncher-Linux-x86_64.AppImage
+          mv PrismLauncher-*.AppImage.zsync/PrismLauncher-*-x86_64.AppImage.zsync PrismLauncher-Linux-x86_64.AppImage.zsync
+          mv PrismLauncher-*.AppImage/PrismLauncher-*-aarch64.AppImage PrismLauncher-Linux-aarch64.AppImage
+          mv PrismLauncher-*.AppImage.zsync/PrismLauncher-*-aarch64.AppImage.zsync PrismLauncher-Linux-aarch64.AppImage.zsync
+          mv PrismLauncher-macOS*/PrismLauncher.zip PrismLauncher-macOS-${{ inputs.VERSION }}.zip
+          mv PrismLauncher-macOS*/PrismLauncher.dmg PrismLauncher-macOS-${{ inputs.VERSION }}.dmg
+
+          tar --exclude='.git' -czf PrismLauncher-${{ inputs.VERSION }}.tar.gz PrismLauncher-${{ inputs.VERSION }}
+
+          for d in PrismLauncher-Windows-MSVC*; do
+            cd "${d}" || continue
+            LEGACY="$(echo -n ${d} | grep -o Legacy || true)"
+            ARM64="$(echo -n ${d} | grep -o arm64 || true)"
+            INST="$(echo -n ${d} | grep -o Setup || true)"
+            PORT="$(echo -n ${d} | grep -o Portable || true)"
+            NAME="PrismLauncher-Windows-MSVC"
+            test -z "${LEGACY}" || NAME="${NAME}-Legacy"
+            test -z "${ARM64}" || NAME="${NAME}-arm64"
+            test -z "${PORT}" || NAME="${NAME}-Portable"
+            test -z "${INST}" || mv PrismLauncher-*.exe ../${NAME}-Setup-${{ inputs.VERSION }}.exe
+            test -n "${INST}" || zip -r -9 "../${NAME}-${{ inputs.VERSION }}.zip" *
+            cd ..
+          done
+
+          for d in PrismLauncher-Windows-MinGW-w64*; do
+            cd "${d}" || continue
+            INST="$(echo -n ${d} | grep -o Setup || true)"
+            PORT="$(echo -n ${d} | grep -o Portable || true)"
+            NAME="PrismLauncher-Windows-MinGW-w64"
+            test -z "${PORT}" || NAME="${NAME}-Portable"
+            test -z "${INST}" || mv PrismLauncher-*.exe ../${NAME}-Setup-${{ inputs.VERSION }}.exe
+            test -n "${INST}" || zip -r -9 "../${NAME}-${{ inputs.VERSION }}.zip" *
+            cd ..
+          done
+
+      - name: Create release
+        id: create_release
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref }}
+          name: Prism Launcher ${{ inputs.VERSION }}
+          draft: true
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            PrismLauncher-Linux-x86_64.AppImage
+            PrismLauncher-Linux-x86_64.AppImage.zsync
+            PrismLauncher-Linux-aarch64.AppImage
+            PrismLauncher-Linux-aarch64.AppImage.zsync
+            PrismLauncher-Linux-Qt6-Portable-${{ inputs.VERSION }}.tar.gz
+            PrismLauncher-Linux-aarch64-Qt6-Portable-${{ inputs.VERSION }}.tar.gz
+            PrismLauncher-Windows-MinGW-w64-${{ inputs.VERSION }}.zip
+            PrismLauncher-Windows-MinGW-w64-Portable-${{ inputs.VERSION }}.zip
+            PrismLauncher-Windows-MinGW-w64-Setup-${{ inputs.VERSION }}.exe
+            PrismLauncher-Windows-MSVC-arm64-${{ inputs.VERSION }}.zip
+            PrismLauncher-Windows-MSVC-arm64-Portable-${{ inputs.VERSION }}.zip
+            PrismLauncher-Windows-MSVC-arm64-Setup-${{ inputs.VERSION }}.exe
+            PrismLauncher-Windows-MSVC-${{ inputs.VERSION }}.zip
+            PrismLauncher-Windows-MSVC-Portable-${{ inputs.VERSION }}.zip
+            PrismLauncher-Windows-MSVC-Setup-${{ inputs.VERSION }}.exe
+            PrismLauncher-macOS-${{ inputs.VERSION }}.zip
+            PrismLauncher-macOS-${{ inputs.VERSION }}.dmg
+            PrismLauncher-${{ inputs.VERSION }}.tar.gz
